@@ -15,7 +15,7 @@ EMBEDDING_MODEL = "BAAI/bge-m3"
 # Qdrant Configuration
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME = "myschemerag"
+COLLECTION_NAME = "myscheme_rag"
 
 # Theme Categories for Chunking
 THEME_CATEGORIES = [
