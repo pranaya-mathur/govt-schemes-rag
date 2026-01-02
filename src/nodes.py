@@ -1,5 +1,5 @@
 from typing import TypedDict, List, Optional
-from src.llm import get_llm
+from src.llm import get_ollama_llm, get_groq_llm
 from src.prompts import (
     intent_prompt, relevance_prompt, reflection_prompt,
     answer_quality_prompt, corrective_prompt, answer_prompt
@@ -21,18 +21,20 @@ class RAGState(TypedDict):
     intent: Optional[str]
 
 
-llm = get_llm()
+# Hybrid LLM setup
+ollama_llm = get_ollama_llm()  # For adaptive tasks (intent, reflection)
+groq_llm = get_groq_llm()      # For heavy tasks (answer, judges)
 retriever = VectorRetriever()
 
 
 def classify_intent(query: str) -> str:
-    """Classify user query intent"""
+    """Classify user query intent using Ollama (deepseek-r1:8b)"""
     if not query or not query.strip():
         raise EmptyQueryError("Query cannot be empty")
     
     try:
         logger.info(f"Classifying intent for query: {query[:50]}...")
-        chain = intent_prompt | llm
+        chain = intent_prompt | ollama_llm  # Using Ollama
         result = chain.invoke({"query": query})
         intent = result.content.strip().upper()
         
@@ -48,7 +50,7 @@ def classify_intent(query: str) -> str:
 
 
 def intent_node(state: RAGState):
-    """Intent classification node"""
+    """Intent classification node - Uses Ollama"""
     intent = classify_intent(state["query"])
     return {"intent": intent}
 
@@ -62,10 +64,10 @@ def retrieval_node(state: RAGState):
 
 
 def judge_relevance(query: str, retrieved_docs: list) -> bool:
-    """Judge if retrieved docs are relevant"""
+    """Judge if retrieved docs are relevant using Groq (llama-3.3-70b)"""
     try:
         schemes_text = retriever.format_for_judge(retrieved_docs)
-        chain = relevance_prompt | llm
+        chain = relevance_prompt | groq_llm  # Using Groq
         result = chain.invoke({"query": query, "schemes": schemes_text})
         verdict = result.content.strip().upper()
         
@@ -78,7 +80,7 @@ def judge_relevance(query: str, retrieved_docs: list) -> bool:
 
 
 def selfrag_judge_node(state: RAGState):
-    """Self-RAG relevance judgment node"""
+    """Self-RAG relevance judgment node - Uses Groq"""
     needs_reflection = judge_relevance(
         state["query"], 
         state["retrieved_docs"]
@@ -87,10 +89,10 @@ def selfrag_judge_node(state: RAGState):
 
 
 def refine_query(query: str) -> str:
-    """Refine query for better retrieval"""
+    """Refine query for better retrieval using Ollama (deepseek-r1:8b)"""
     try:
         logger.info(f"Refining query: {query[:50]}...")
-        chain = reflection_prompt | llm
+        chain = reflection_prompt | ollama_llm  # Using Ollama
         result = chain.invoke({"query": query})
         refined = result.content.strip()
         logger.info(f"Refined query: {refined[:50]}...")
@@ -102,7 +104,7 @@ def refine_query(query: str) -> str:
 
 
 def reflection_node(state: RAGState):
-    """Query refinement and re-retrieval node"""
+    """Query refinement and re-retrieval node - Uses Ollama"""
     refined_query = refine_query(state["query"])
     refined_docs = retriever.retrieve(refined_query)
     logger.info(f"Re-retrieved {len(refined_docs)} documents after refinement")
@@ -116,11 +118,11 @@ def reflection_node(state: RAGState):
 
 
 def answer_node(state: RAGState):
-    """Answer generation node"""
+    """Answer generation node - Uses Groq (llama-3.3-70b)"""
     try:
         logger.info("Generating answer...")
         schemes_text = retriever.format_for_answer(state["retrieved_docs"])
-        chain = answer_prompt | llm
+        chain = answer_prompt | groq_llm  # Using Groq
         result = chain.invoke({
             "query": state["query"],
             "schemes": schemes_text
@@ -133,9 +135,9 @@ def answer_node(state: RAGState):
 
 
 def is_answer_inadequate(query: str, answer: str) -> bool:
-    """Check if answer quality is poor"""
+    """Check if answer quality is poor using Groq (llama-3.3-70b)"""
     try:
-        chain = answer_quality_prompt | llm
+        chain = answer_quality_prompt | groq_llm  # Using Groq
         result = chain.invoke({"query": query, "answer": answer})
         verdict = result.content.strip().upper()
         
@@ -149,10 +151,10 @@ def is_answer_inadequate(query: str, answer: str) -> bool:
 
 
 def corrective_query(query: str) -> str:
-    """Generate corrective query"""
+    """Generate corrective query using Ollama (deepseek-r1:8b)"""
     try:
         logger.info("Generating corrective query...")
-        chain = corrective_prompt | llm
+        chain = corrective_prompt | ollama_llm  # Using Ollama
         result = chain.invoke({"query": query})
         corrected = result.content.strip()
         logger.info(f"Corrective query: {corrected[:50]}...")
@@ -163,7 +165,7 @@ def corrective_query(query: str) -> str:
 
 
 def corrective_rag_node(state: RAGState):
-    """Corrective RAG node for answer improvement"""
+    """Corrective RAG node for answer improvement - Uses Ollama"""
     needs_correction = is_answer_inadequate(
         state["query"], 
         state["answer"]
