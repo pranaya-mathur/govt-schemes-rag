@@ -11,9 +11,9 @@ import config
 
 logger = setup_logger(__name__)
 
-# Maximum iteration limits to prevent infinite loops
-MAX_REFLECTION_ITERATIONS = 2
-MAX_CORRECTION_ITERATIONS = 2
+# Import iteration limits from config
+MAX_REFLECTION_ITERATIONS = config.MAX_REFLECTION_ITERATIONS
+MAX_CORRECTION_ITERATIONS = config.MAX_CORRECTION_ITERATIONS
 
 
 class RAGState(TypedDict):
