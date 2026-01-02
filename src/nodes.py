@@ -11,6 +11,10 @@ import config
 
 logger = setup_logger(__name__)
 
+# Maximum iteration limits to prevent infinite loops
+MAX_REFLECTION_ITERATIONS = 2
+MAX_CORRECTION_ITERATIONS = 2
+
 
 class RAGState(TypedDict):
     query: str
@@ -19,6 +23,8 @@ class RAGState(TypedDict):
     needs_reflection: Optional[bool]
     needs_correction: Optional[bool]
     intent: Optional[str]
+    reflection_count: Optional[int]
+    correction_count: Optional[int]
 
 
 # Hybrid LLM setup
@@ -52,7 +58,11 @@ def classify_intent(query: str) -> str:
 def intent_node(state: RAGState):
     """Intent classification node - Uses Ollama"""
     intent = classify_intent(state["query"])
-    return {"intent": intent}
+    return {
+        "intent": intent,
+        "reflection_count": 0,
+        "correction_count": 0
+    }
 
 
 def retrieval_node(state: RAGState):
@@ -63,8 +73,13 @@ def retrieval_node(state: RAGState):
     return {"retrieved_docs": docs}
 
 
-def judge_relevance(query: str, retrieved_docs: list) -> bool:
+def judge_relevance(query: str, retrieved_docs: list, reflection_count: int) -> bool:
     """Judge if retrieved docs are relevant using Groq (llama-3.3-70b)"""
+    # Stop reflection if max iterations reached
+    if reflection_count >= MAX_REFLECTION_ITERATIONS:
+        logger.warning(f"Max reflection iterations ({MAX_REFLECTION_ITERATIONS}) reached. Proceeding with current docs.")
+        return False
+    
     try:
         schemes_text = retriever.format_for_judge(retrieved_docs)
         chain = relevance_prompt | groq_llm  # Using Groq
@@ -76,14 +91,17 @@ def judge_relevance(query: str, retrieved_docs: list) -> bool:
         return needs_reflection
     except Exception as e:
         logger.error(f"Relevance judgment failed: {str(e)}")
-        raise LLMError(f"Failed to judge relevance: {str(e)}")
+        # Assume docs are relevant on error to avoid infinite loops
+        return False
 
 
 def selfrag_judge_node(state: RAGState):
     """Self-RAG relevance judgment node - Uses Groq"""
+    reflection_count = state.get("reflection_count", 0)
     needs_reflection = judge_relevance(
         state["query"], 
-        state["retrieved_docs"]
+        state["retrieved_docs"],
+        reflection_count
     )
     return {"needs_reflection": needs_reflection}
 
@@ -105,6 +123,9 @@ def refine_query(query: str) -> str:
 
 def reflection_node(state: RAGState):
     """Query refinement and re-retrieval node - Uses Ollama"""
+    reflection_count = state.get("reflection_count", 0) + 1
+    logger.info(f"Reflection iteration {reflection_count}/{MAX_REFLECTION_ITERATIONS}")
+    
     refined_query = refine_query(state["query"])
     refined_docs = retriever.retrieve(refined_query)
     logger.info(f"Re-retrieved {len(refined_docs)} documents after refinement")
@@ -113,7 +134,8 @@ def reflection_node(state: RAGState):
         "query": refined_query,
         "retrieved_docs": refined_docs,
         "needs_reflection": False,
-        "needs_correction": False
+        "needs_correction": False,
+        "reflection_count": reflection_count
     }
 
 
@@ -134,8 +156,13 @@ def answer_node(state: RAGState):
         raise LLMError(f"Failed to generate answer: {str(e)}")
 
 
-def is_answer_inadequate(query: str, answer: str) -> bool:
+def is_answer_inadequate(query: str, answer: str, correction_count: int) -> bool:
     """Check if answer quality is poor using Groq (llama-3.3-70b)"""
+    # Stop correction if max iterations reached
+    if correction_count >= MAX_CORRECTION_ITERATIONS:
+        logger.warning(f"Max correction iterations ({MAX_CORRECTION_ITERATIONS}) reached. Accepting current answer.")
+        return False
+    
     try:
         chain = answer_quality_prompt | groq_llm  # Using Groq
         result = chain.invoke({"query": query, "answer": answer})
@@ -146,7 +173,7 @@ def is_answer_inadequate(query: str, answer: str) -> bool:
         return is_bad
     except Exception as e:
         logger.error(f"Answer quality check failed: {str(e)}")
-        # Assume answer is good on error
+        # Assume answer is good on error to avoid infinite loops
         return False
 
 
@@ -166,13 +193,19 @@ def corrective_query(query: str) -> str:
 
 def corrective_rag_node(state: RAGState):
     """Corrective RAG node for answer improvement - Uses Ollama"""
+    correction_count = state.get("correction_count", 0)
+    
     needs_correction = is_answer_inadequate(
         state["query"], 
-        state["answer"]
+        state["answer"],
+        correction_count
     )
     
     if not needs_correction:
         return {"needs_correction": False}
+    
+    correction_count += 1
+    logger.info(f"Correction iteration {correction_count}/{MAX_CORRECTION_ITERATIONS}")
     
     new_query = corrective_query(state["query"])
     new_docs = retriever.retrieve(new_query)
@@ -182,5 +215,6 @@ def corrective_rag_node(state: RAGState):
         "query": new_query,
         "retrieved_docs": new_docs,
         "needs_correction": False,
-        "needs_reflection": False
+        "needs_reflection": False,
+        "correction_count": correction_count
     }
