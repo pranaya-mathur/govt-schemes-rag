@@ -14,7 +14,7 @@ LLM_MODEL = "llama-3.3-70b-versatile"
 TEMPERATURE = 0.2
 
 # Vector DB
-COLLECTION_NAME = "myschemerag"
+COLLECTION_NAME = "myscheme_rag"
 TOP_K = 5
 
 # Intent Labels - Based on user query patterns
