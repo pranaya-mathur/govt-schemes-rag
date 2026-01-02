@@ -16,3 +16,6 @@ pydantic>=2.0.0
 
 # Utils
 python-dotenv>=1.0.0
+
+# Ollama (for chunking)
+openai>=1.0.0  # Required by langchain-community for ChatOllama
