@@ -17,12 +17,16 @@ TEMPERATURE = 0.2
 COLLECTION_NAME = "myschemerag"
 TOP_K = 5
 
-# Intent Labels
-INTENT_LABELS = {
-    "DISCOVERY",  # find schemes
-    "ELIGIBILITY",  # who can apply
-    "BENEFITS",  # money/subsidy amount
-    "COMPARISON",  # compare schemes
-    "PROCEDURE",  # how to apply
-    "GENERAL"  # fallback
-}
+# Intent Labels - Based on user query patterns
+INTENT_LABELS = [
+    "DISCOVERY",      # find/search/show me schemes
+    "ELIGIBILITY",    # am I eligible/who can apply/age limit
+    "BENEFITS",       # how much/subsidy amount/loan/funding
+    "COMPARISON",     # compare/difference between/vs
+    "PROCEDURE",      # how to apply/steps/process/documents
+    "GENERAL"         # fallback
+]
+
+# Logging
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
