@@ -10,11 +10,23 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
 # Model Configuration
 EMBEDDING_MODEL = "BAAI/bge-m3"
-LLM_MODEL = "llama-3.3-70b-versatile"
+
+# LLM Models - Hybrid Approach
+# Ollama for adaptive/lightweight tasks (local, free)
+OLLAMA_MODEL = "deepseek-r1:8b"
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# Groq for heavy lifting (cloud, fast)
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+# Chunking Model (for data pipeline)
+CHUNKING_MODEL = "llama3.1:8b"  # Ollama
+
+# Temperature
 TEMPERATURE = 0.2
 
 # Vector DB
-COLLECTION_NAME = "myscheme_rag"
+COLLECTION_NAME = "myschemerag"
 TOP_K = 5
 
 # Intent Labels - Based on user query patterns
