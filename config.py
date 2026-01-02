@@ -26,7 +26,7 @@ CHUNKING_MODEL = "llama3.1:8b"  # Ollama
 TEMPERATURE = 0.2
 
 # Vector DB
-COLLECTION_NAME = "myschemerag"
+COLLECTION_NAME = "myscheme_rag"
 TOP_K = 5
 
 # Intent Labels - Based on user query patterns
