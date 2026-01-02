@@ -1,32 +1,25 @@
-"""Configuration for data pipeline"""
+"""Data pipeline configuration - imports from shared_config.py
+This file is kept for backward compatibility.
+All new config should be added to shared_config.py
+"""
+import sys
 import os
-from dotenv import load_dotenv
 
-load_dotenv()
+# Add parent directory to path to import shared_config
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Ollama Configuration for Chunking
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-CHUNKING_MODEL = "llama3.1:8b"  # LLM Verdict model
-TEMPERATURE = 0.2
+from shared_config import *
 
-# Embedding Model
-EMBEDDING_MODEL = "BAAI/bge-m3"
-
-# Qdrant Configuration
-QDRANT_URL = os.getenv("QDRANT_URL")
-QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-COLLECTION_NAME = "myscheme_rag"
-
-# Theme Categories for Chunking
-THEME_CATEGORIES = [
-    "benefits",
-    "eligibility",
-    "application-steps",
-    "documents",
-    "contact",
-    "general"
+# Re-export all configuration for backward compatibility
+__all__ = [
+    'OLLAMA_BASE_URL',
+    'CHUNKING_MODEL',
+    'TEMPERATURE',
+    'EMBEDDING_MODEL',
+    'QDRANT_URL',
+    'QDRANT_API_KEY',
+    'COLLECTION_NAME',
+    'THEME_CATEGORIES',
+    'MAX_CHUNK_SIZE',
+    'MIN_CHUNK_SIZE'
 ]
-
-# Chunking Parameters
-MAX_CHUNK_SIZE = 500  # tokens
-MIN_CHUNK_SIZE = 50   # tokens
