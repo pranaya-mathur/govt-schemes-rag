@@ -9,7 +9,7 @@ Run this once after data indexing to enable metadata filtering.
 """
 import sys
 from qdrant_client import QdrantClient
-from qdrant_client.models import PayloadSchemaType, PayloadIndexParams
+from qdrant_client.models import PayloadSchemaType
 import data_pipeline.config as config
 
 
@@ -74,9 +74,6 @@ def create_payload_indexes():
         print("Verifying indexes...")
         collection_info = client.get_collection(config.COLLECTION_NAME)
         
-        # Get payload schema if available
-        payload_schema = collection_info.config.params.get('payload_schema', {})
-        
         print(f"\nCollection: {config.COLLECTION_NAME}")
         print(f"Points: {collection_info.points_count}")
         print(f"Vector size: {collection_info.config.params.vectors.size}")
@@ -98,6 +95,8 @@ def create_payload_indexes():
         print("1. Check Qdrant connection settings in .env")
         print("2. Ensure collection exists (run data pipeline first)")
         print("3. Check Qdrant server is running and accessible")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
