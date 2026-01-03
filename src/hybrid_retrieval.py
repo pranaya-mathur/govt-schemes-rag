@@ -227,7 +227,8 @@ class HybridRetriever:
         
         # Perform both searches
         bm25_results = self._bm25_search(query, top_k)
-        semantic_results = self.semantic_retriever.retrieve(query, top_k * 2)
+        # FIX: Call internal _semantic_retrieve() to avoid recursion
+        semantic_results = self.semantic_retriever._semantic_retrieve(query, top_k * 2)
         
         # If BM25 failed, fall back to semantic only
         if not bm25_results:
