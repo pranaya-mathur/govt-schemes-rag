@@ -503,7 +503,6 @@ See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for detailed procedures.
 ## Author
 
 **Pranay Mathur**  
-Software Engineer | MLOps Specialist
 
 GitHub: [@pranaya-mathur](https://github.com/pranaya-mathur)
 
@@ -514,5 +513,3 @@ GitHub: [@pranaya-mathur](https://github.com/pranaya-mathur)
 MIT License
 
 ---
-
-*This project demonstrates production ML system design including architectural decision-making, cost optimization, scalability patterns, and deployment automation - core competencies for Senior/Staff engineer roles in ML infrastructure.*
