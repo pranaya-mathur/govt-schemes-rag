@@ -66,14 +66,7 @@ def intent_node(state: RAGState):
 
 
 def retrieval_node(state: RAGState):
-    """
-    Document retrieval node with intent-specific parameters
-    
-    Now uses:
-    - Intent-specific top_k values
-    - Adaptive threshold filtering
-    - Hybrid retrieval (BM25 + semantic)
-    """
+    """Document retrieval node with intent-specific parameters"""
     intent = state.get("intent", "GENERAL")
     logger.info(f"Retrieving documents for query: {state['query'][:50]}... (intent={intent})")
     
@@ -85,48 +78,26 @@ def retrieval_node(state: RAGState):
 
 
 def judge_relevance(query: str, retrieved_docs: list, reflection_count: int) -> bool:
-    """Judge if retrieved docs are relevant using Groq (llama-3.3-70b)"""
+    """Simple YES/NO relevance judge using Groq (llama-3.3-70b)
+    
+    Returns True if docs are NOT relevant (needs reflection)
+    """
     # Stop reflection if max iterations reached
     if reflection_count >= MAX_REFLECTION_ITERATIONS:
         logger.warning(f"Max reflection iterations ({MAX_REFLECTION_ITERATIONS}) reached. Proceeding with current docs.")
         return False
     
-    # Score-based auto-approval: Skip judge if scores are clearly good
-    if retrieved_docs:
-        scores = [doc.get('score', 0) for doc in retrieved_docs]
-        avg_score = sum(scores) / len(scores)
-        top_score = max(scores) if scores else 0
-        
-        # Auto-approve if scores are excellent
-        if avg_score >= 0.65:
-            logger.info(f"Auto-approved: avg_score={avg_score:.3f} >= 0.65 (excellent) => RELEVANT")
-            return False
-        
-        # Auto-approve if average is good AND top doc is excellent
-        if avg_score >= 0.55 and top_score >= 0.70:
-            logger.info(f"Auto-approved: avg={avg_score:.3f}, top={top_score:.3f} => RELEVANT")
-            return False
-        
-        logger.debug(f"Calling judge: avg_score={avg_score:.3f}, top_score={top_score:.3f}")
-    
     try:
         schemes_text = retriever.format_for_judge(retrieved_docs)
         
-        # DEBUG: Log what judge sees
-        logger.debug(f"\n{'='*80}\nRELEVANCE JUDGE INPUT:\n{'='*80}\n"
-                    f"Query: {query}\n\n"
-                    f"Schemes Preview:\n{schemes_text[:1000]}...\n{'='*80}")
+        logger.debug(f"Relevance judge input - Query: {query[:50]}...")
         
-        chain = relevance_prompt | groq_llm  # Using Groq
+        chain = relevance_prompt | groq_llm
         result = chain.invoke({"query": query, "schemes": schemes_text})
-        
-        # DEBUG: Log raw LLM response
-        logger.debug(f"Relevance judge raw response: '{result.content}'")
         
         verdict = result.content.strip().upper()
         needs_reflection = verdict == "NO"
         
-        # Use ASCII arrow for Windows compatibility
         logger.info(f"Relevance judgment: {verdict} => {'NEEDS_REFLECTION' if needs_reflection else 'RELEVANT'}")
         return needs_reflection
     except Exception as e:
@@ -150,7 +121,7 @@ def refine_query(query: str) -> str:
     """Refine query for better retrieval using Ollama (deepseek-r1:8b)"""
     try:
         logger.info(f"Refining query: {query[:50]}...")
-        chain = reflection_prompt | ollama_llm  # Using Ollama
+        chain = reflection_prompt | ollama_llm
         result = chain.invoke({"query": query})
         refined = result.content.strip()
         logger.info(f"Refined query: {refined[:100]}...")
@@ -162,11 +133,7 @@ def refine_query(query: str) -> str:
 
 
 def reflection_node(state: RAGState):
-    """
-    Query refinement and re-retrieval node - Uses Ollama
-    
-    Now maintains intent context for consistent retrieval behavior
-    """
+    """Query refinement and re-retrieval node - Uses Ollama"""
     reflection_count = state.get("reflection_count", 0) + 1
     intent = state.get("intent", "GENERAL")
     
@@ -194,10 +161,9 @@ def answer_node(state: RAGState):
         logger.info("Generating answer...")
         schemes_text = retriever.format_for_answer(state["retrieved_docs"])
         
-        # DEBUG: Log input to answer generation
         logger.debug(f"Answer generation using {len(state['retrieved_docs'])} documents")
         
-        chain = answer_prompt | groq_llm  # Using Groq
+        chain = answer_prompt | groq_llm
         result = chain.invoke({
             "query": state["query"],
             "schemes": schemes_text
@@ -210,28 +176,24 @@ def answer_node(state: RAGState):
 
 
 def is_answer_inadequate(query: str, answer: str, correction_count: int) -> bool:
-    """Check if answer quality is poor using Groq (llama-3.3-70b)"""
+    """Simple YES/NO answer quality judge using Groq (llama-3.3-70b)
+    
+    Returns True if answer is inadequate (needs correction)
+    """
     # Stop correction if max iterations reached
     if correction_count >= MAX_CORRECTION_ITERATIONS:
         logger.warning(f"Max correction iterations ({MAX_CORRECTION_ITERATIONS}) reached. Accepting current answer.")
         return False
     
     try:
-        # DEBUG: Log what quality judge sees
-        logger.debug(f"\n{'='*80}\nQUALITY JUDGE INPUT:\n{'='*80}\n"
-                    f"Query: {query}\n\n"
-                    f"Answer:\n{answer[:500]}...\n{'='*80}")
+        logger.debug(f"Quality judge input - Query: {query[:50]}...")
         
-        chain = answer_quality_prompt | groq_llm  # Using Groq
+        chain = answer_quality_prompt | groq_llm
         result = chain.invoke({"query": query, "answer": answer})
-        
-        # DEBUG: Log raw LLM response
-        logger.debug(f"Quality judge raw response: '{result.content}'")
         
         verdict = result.content.strip().upper()
         is_bad = verdict == "YES"
         
-        # Use ASCII arrow for Windows compatibility
         logger.info(f"Answer quality check: {verdict} => {'INADEQUATE (needs correction)' if is_bad else 'GOOD (accepted)'}")
         return is_bad
     except Exception as e:
@@ -244,7 +206,7 @@ def corrective_query(query: str) -> str:
     """Generate corrective query using Ollama (deepseek-r1:8b)"""
     try:
         logger.info("Generating corrective query...")
-        chain = corrective_prompt | ollama_llm  # Using Ollama
+        chain = corrective_prompt | ollama_llm
         result = chain.invoke({"query": query})
         corrected = result.content.strip()
         logger.info(f"Corrective query: {corrected[:100]}...")
@@ -255,11 +217,7 @@ def corrective_query(query: str) -> str:
 
 
 def corrective_rag_node(state: RAGState):
-    """
-    Corrective RAG node for answer improvement - Uses Ollama
-    
-    Now maintains intent context for consistent retrieval
-    """
+    """Corrective RAG node for answer improvement - Uses Ollama"""
     correction_count = state.get("correction_count", 0)
     intent = state.get("intent", "GENERAL")
     
