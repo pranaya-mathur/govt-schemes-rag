@@ -11,6 +11,7 @@ torch>=2.0.0
 
 # Hybrid Search
 rank-bm25>=0.2.2
+rapidFuzz>=3.0.0  # Fuzzy matching for scheme name extraction
 numpy>=1.24.0
 
 # API
