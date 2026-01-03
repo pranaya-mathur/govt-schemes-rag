@@ -36,6 +36,7 @@ TEMPERATURE = 0.2
 # ============================================
 COLLECTION_NAME = "myscheme_rag"
 TOP_K = 5
+MIN_SIMILARITY_SCORE = 0.5  # Filter out docs with similarity score below this threshold
 
 # ============================================
 # INTENT CLASSIFICATION
