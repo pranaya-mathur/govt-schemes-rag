@@ -223,9 +223,11 @@ class HybridRetriever:
             doc_data['retrieval_sources'] = list(info['sources'])
             results.append(doc_data)
         
+        # Fixed f-string syntax
+        top_score = results[0]['score'] if results else 0
         logger.debug(
             f"RRF normalization: max_rrf={max_rrf_score:.4f}, "
-            f"top_score={results[0]['score']:.3f if results else 0}"
+            f"top_score={top_score:.3f}"
         )
         
         return results
@@ -280,10 +282,11 @@ class HybridRetriever:
             for source in doc.get('retrieval_sources', []):
                 sources_count[source] += 1
         
-        score_range = (
-            f"{final_results[0]['score']:.3f}-{final_results[-1]['score']:.3f}"
-            if final_results else "N/A"
-        )
+        # Fixed f-string syntax  
+        if final_results:
+            score_range = f"{final_results[0]['score']:.3f}-{final_results[-1]['score']:.3f}"
+        else:
+            score_range = "N/A"
         
         logger.info(
             f"Hybrid retrieval returned {len(final_results)} docs. "
