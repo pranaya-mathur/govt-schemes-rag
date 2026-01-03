@@ -1,169 +1,278 @@
 """Query Decomposer - Extract scheme names and entities from queries
 
-This module provides intelligent query understanding to extract:
-- Scheme names (PMEGP, MUDRA, Stand-Up India, etc.)
-- Query type classification
-- Entity normalization and fuzzy matching
+Dynamically loads ALL scheme names from Qdrant and uses fuzzy matching
+to handle variations, typos, and acronyms.
 
-Used for metadata-aware retrieval to guarantee scheme-specific accuracy.
+No hardcoded schemes - adapts automatically to database content.
 """
 import re
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Set
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import PromptTemplate
 from src.logger import setup_logger
 import config
 
+try:
+    from rapidfuzz import fuzz, process
+    FUZZY_MATCHING_AVAILABLE = True
+except ImportError:
+    FUZZY_MATCHING_AVAILABLE = False
+    logger.warning("rapidfuzz not installed. Fuzzy matching disabled. Install: pip install rapidfuzz")
+
 logger = setup_logger(__name__)
 
 
 class QueryDecomposer:
-    """Extract scheme names and entities from user queries"""
+    """Extract scheme names from queries using dynamic loading + fuzzy matching"""
     
-    # Common Indian government scheme acronyms and full names
-    KNOWN_SCHEMES = {
-        # MSME & Entrepreneurship
-        'PMEGP': ['PMEGP', 'Prime Minister Employment Generation Programme', 'PM Employment Generation'],
-        'MUDRA': ['MUDRA', 'Micro Units Development Refinance Agency', 'MUDRA Loan', 'Pradhan Mantri MUDRA Yojana'],
-        'CGTMSE': ['CGTMSE', 'Credit Guarantee Fund Trust for Micro and Small Enterprises'],
-        'STAND UP INDIA': ['Stand Up India', 'Stand-Up India', 'Standup India'],
-        'STARTUP INDIA': ['Startup India', 'Start-up India', 'Start Up India'],
+    def __init__(self, qdrant_client=None, collection_name: str = None):
+        """Initialize query decomposer with dynamic scheme loading
         
-        # Rural & Agriculture
-        'PMKSY': ['PMKSY', 'Pradhan Mantri Krishi Sinchayee Yojana', 'PM Krishi Sinchayee'],
-        'PM-KISAN': ['PM-KISAN', 'PM KISAN', 'Pradhan Mantri Kisan Samman Nidhi'],
-        'PMFBY': ['PMFBY', 'Pradhan Mantri Fasal Bima Yojana', 'PM Fasal Bima'],
-        
-        # Housing & Urban
-        'PMAY': ['PMAY', 'Pradhan Mantri Awas Yojana', 'PM Awas Yojana'],
-        'AMRUT': ['AMRUT', 'Atal Mission for Rejuvenation and Urban Transformation'],
-        
-        # Education & Skill
-        'PMKVY': ['PMKVY', 'Pradhan Mantri Kaushal Vikas Yojana', 'PM Kaushal Vikas'],
-        'NSP': ['NSP', 'National Scholarship Portal'],
-        
-        # Healthcare
-        'PMJAY': ['PMJAY', 'Pradhan Mantri Jan Arogya Yojana', 'Ayushman Bharat'],
-        
-        # Financial Inclusion
-        'PMJDY': ['PMJDY', 'Pradhan Mantri Jan Dhan Yojana', 'PM Jan Dhan'],
-        'APY': ['APY', 'Atal Pension Yojana'],
-        
-        # Energy
-        'PMUY': ['PMUY', 'Pradhan Mantri Ujjwala Yojana', 'PM Ujjwala'],
-        
-        # Infrastructure
-        'PMGSY': ['PMGSY', 'Pradhan Mantri Gram Sadak Yojana', 'PM Gram Sadak']
-    }
-    
-    def __init__(self):
-        """Initialize query decomposer with Ollama LLM"""
+        Args:
+            qdrant_client: Optional Qdrant client for loading schemes
+            collection_name: Optional collection name
+        """
         self.llm = ChatOllama(
             model=config.OLLAMA_MODEL,
             temperature=0.1,  # Low temperature for precise extraction
             base_url=config.OLLAMA_BASE_URL
         )
         
-        # Build reverse lookup map for fast matching
-        self._build_scheme_lookup()
+        self.qdrant_client = qdrant_client
+        self.collection_name = collection_name or config.COLLECTION_NAME
         
-        logger.info(f"QueryDecomposer initialized with {len(self.KNOWN_SCHEMES)} known schemes")
-    
-    def _build_scheme_lookup(self):
-        """Build reverse lookup map: variant -> canonical name"""
-        self.scheme_lookup = {}
-        for canonical, variants in self.KNOWN_SCHEMES.items():
-            for variant in variants:
-                # Store lowercase for case-insensitive matching
-                self.scheme_lookup[variant.lower()] = canonical
+        # Dynamic scheme list (loaded from Qdrant)
+        self.all_schemes: Set[str] = set()
+        self.scheme_variations: Dict[str, str] = {}  # variant -> canonical
         
-        logger.debug(f"Built scheme lookup with {len(self.scheme_lookup)} variants")
+        # Load schemes from Qdrant if client provided
+        if qdrant_client:
+            self._load_schemes_from_qdrant()
+        else:
+            logger.warning("No Qdrant client provided. Using LLM-only extraction.")
+        
+        logger.info(f"QueryDecomposer initialized with {len(self.all_schemes)} unique schemes")
     
-    def _extract_with_regex(self, query: str) -> List[str]:
-        """Fast regex-based extraction for known scheme patterns"""
+    def _load_schemes_from_qdrant(self):
+        """Load ALL scheme names from Qdrant collection"""
+        try:
+            logger.info(f"Loading scheme names from Qdrant collection: {self.collection_name}")
+            
+            # Scroll through all documents to get unique scheme names
+            offset = None
+            scheme_set = set()
+            
+            while True:
+                results = self.qdrant_client.scroll(
+                    collection_name=self.collection_name,
+                    limit=100,
+                    offset=offset,
+                    with_payload=['scheme_name'],
+                    with_vectors=False
+                )
+                
+                points, offset = results
+                
+                if not points:
+                    break
+                
+                # Extract scheme names
+                for point in points:
+                    scheme_name = point.payload.get('scheme_name')
+                    if scheme_name and scheme_name != 'Unknown':
+                        scheme_set.add(scheme_name)
+                
+                if offset is None:
+                    break
+            
+            self.all_schemes = scheme_set
+            
+            # Build variations map for fuzzy matching
+            self._build_variations_map()
+            
+            logger.info(f"Loaded {len(self.all_schemes)} unique schemes from Qdrant")
+            
+        except Exception as e:
+            logger.error(f"Failed to load schemes from Qdrant: {e}")
+            logger.warning("Falling back to LLM-only extraction")
+            self.all_schemes = set()
+    
+    def _build_variations_map(self):
+        """Build variations map for faster exact/fuzzy matching"""
+        for scheme in self.all_schemes:
+            # Store lowercase for case-insensitive matching
+            self.scheme_variations[scheme.lower()] = scheme
+            
+            # Add common variations
+            # Remove special characters
+            clean_name = re.sub(r'[^a-zA-Z0-9\s]', '', scheme)
+            self.scheme_variations[clean_name.lower()] = scheme
+            
+            # Add acronym if applicable (e.g., "PMEGP" from "Prime Minister...")
+            words = scheme.split()
+            if len(words) > 2:
+                acronym = ''.join(word[0].upper() for word in words if word[0].isupper())
+                if len(acronym) >= 3:
+                    self.scheme_variations[acronym.lower()] = scheme
+        
+        logger.debug(f"Built {len(self.scheme_variations)} scheme variations")
+    
+    def _extract_with_exact_match(self, query: str) -> List[str]:
+        """Fast exact matching against scheme names"""
         found_schemes = set()
         query_lower = query.lower()
         
-        # Direct substring matching
-        for variant, canonical in self.scheme_lookup.items():
+        for variant, canonical in self.scheme_variations.items():
             # Use word boundaries to avoid partial matches
             pattern = r'\b' + re.escape(variant) + r'\b'
             if re.search(pattern, query_lower, re.IGNORECASE):
                 found_schemes.add(canonical)
-                logger.debug(f"Regex match: '{variant}' -> {canonical}")
+                logger.debug(f"Exact match: '{variant}' -> {canonical}")
         
         return list(found_schemes)
     
+    def _extract_with_fuzzy_match(self, query: str, threshold: int = 80) -> List[str]:
+        """Fuzzy matching for handling typos and variations
+        
+        Args:
+            query: User query
+            threshold: Minimum similarity score (0-100)
+            
+        Returns:
+            List of matched scheme names
+        """
+        if not FUZZY_MATCHING_AVAILABLE or not self.all_schemes:
+            return []
+        
+        try:
+            # Extract potential scheme mentions (capitalized words/phrases)
+            potential_schemes = re.findall(r'\b[A-Z][A-Za-z\s-]+\b', query)
+            
+            found_schemes = set()
+            
+            for potential in potential_schemes:
+                # Skip very short matches
+                if len(potential) < 4:
+                    continue
+                
+                # Fuzzy match against all schemes
+                matches = process.extract(
+                    potential,
+                    self.all_schemes,
+                    scorer=fuzz.token_sort_ratio,
+                    limit=3,
+                    score_cutoff=threshold
+                )
+                
+                for match, score, _ in matches:
+                    found_schemes.add(match)
+                    logger.debug(f"Fuzzy match: '{potential}' -> {match} (score: {score})")
+            
+            return list(found_schemes)
+            
+        except Exception as e:
+            logger.warning(f"Fuzzy matching failed: {e}")
+            return []
+    
     def _extract_with_llm(self, query: str) -> List[str]:
-        """LLM-based extraction for complex/ambiguous queries"""
+        """LLM-based extraction with full scheme context"""
+        # Build scheme examples from loaded schemes (sample for prompt)
+        scheme_examples = list(self.all_schemes)[:50] if self.all_schemes else [
+            "PMEGP", "MUDRA", "Stand Up India", "Startup India", "PM-KISAN"
+        ]
+        scheme_list_str = ", ".join(scheme_examples)
+        if len(self.all_schemes) > 50:
+            scheme_list_str += f" and {len(self.all_schemes) - 50} more schemes"
+        
         prompt = PromptTemplate(
             template="""Extract government scheme names from the query.
 
 Query: {query}
 
-Known schemes include: PMEGP, MUDRA, CGTMSE, Stand Up India, Startup India, PMKSY, PM-KISAN, PMAY, PMKVY, PMJAY, PMJDY, and others.
+Available schemes include: {scheme_list}
 
 Instructions:
 1. Identify any government scheme names mentioned
-2. Return ONLY the scheme names, separated by commas
-3. Use standard acronyms (e.g., PMEGP not "Prime Minister Employment Generation Programme")
-4. If no schemes found, return "NONE"
+2. Return ONLY the exact scheme names as they appear in the database
+3. If no schemes found, return "NONE"
+4. Separate multiple schemes with commas
 
 Scheme names:""",
-            input_variables=["query"]
+            input_variables=["query", "scheme_list"]
         )
         
         try:
             chain = prompt | self.llm
-            response = chain.invoke({"query": query})
+            response = chain.invoke({
+                "query": query,
+                "scheme_list": scheme_list_str
+            })
             
             # Parse response
-            result = response.content.strip().upper()
+            result = response.content.strip()
             
-            if result == "NONE" or not result:
+            if result.upper() == "NONE" or not result:
                 return []
             
             # Split by comma and clean
             extracted = [s.strip() for s in result.split(',')]
             
-            # Normalize to canonical names
-            normalized = []
+            # Validate against known schemes (fuzzy match)
+            validated = []
             for scheme in extracted:
-                # Try to find in lookup
-                canonical = self.scheme_lookup.get(scheme.lower())
-                if canonical:
-                    normalized.append(canonical)
-                    logger.debug(f"LLM extraction: '{scheme}' -> {canonical}")
-                elif scheme in self.KNOWN_SCHEMES:
-                    normalized.append(scheme)
-                    logger.debug(f"LLM extraction: '{scheme}' (already canonical)")
+                # Try exact match first
+                if scheme in self.all_schemes:
+                    validated.append(scheme)
+                    logger.debug(f"LLM extraction (exact): {scheme}")
+                # Try fuzzy match
+                elif FUZZY_MATCHING_AVAILABLE and self.all_schemes:
+                    matches = process.extractOne(
+                        scheme,
+                        self.all_schemes,
+                        scorer=fuzz.ratio,
+                        score_cutoff=85
+                    )
+                    if matches:
+                        validated.append(matches[0])
+                        logger.debug(f"LLM extraction (fuzzy): '{scheme}' -> {matches[0]}")
             
-            return normalized
+            return validated
             
         except Exception as e:
-            logger.warning(f"LLM extraction failed: {e}. Falling back to regex.")
+            logger.warning(f"LLM extraction failed: {e}")
             return []
     
     def extract_scheme_names(self, query: str) -> List[str]:
-        """Extract scheme names using hybrid approach (regex + LLM)
+        """Extract scheme names using multi-stage approach
+        
+        Stages:
+        1. Exact matching (fastest)
+        2. Fuzzy matching (handles variations)
+        3. LLM extraction (fallback for complex cases)
         
         Args:
             query: User query
             
         Returns:
-            List of canonical scheme names found in query
+            List of detected scheme names
         """
         logger.info(f"Extracting scheme names from: '{query[:80]}...'")
         
-        # First try fast regex extraction
-        regex_schemes = self._extract_with_regex(query)
+        # Stage 1: Try exact matching first (fastest)
+        exact_schemes = self._extract_with_exact_match(query)
+        if exact_schemes:
+            logger.info(f"Exact match found: {exact_schemes}")
+            return exact_schemes
         
-        if regex_schemes:
-            logger.info(f"Regex extraction found: {regex_schemes}")
-            return regex_schemes
+        # Stage 2: Try fuzzy matching
+        if FUZZY_MATCHING_AVAILABLE:
+            fuzzy_schemes = self._extract_with_fuzzy_match(query, threshold=85)
+            if fuzzy_schemes:
+                logger.info(f"Fuzzy match found: {fuzzy_schemes}")
+                return fuzzy_schemes
         
-        # Fallback to LLM for complex queries
-        logger.debug("No regex matches, trying LLM extraction...")
+        # Stage 3: Fallback to LLM for complex queries
+        logger.debug("No direct matches, trying LLM extraction...")
         llm_schemes = self._extract_with_llm(query)
         
         if llm_schemes:
@@ -174,23 +283,14 @@ Scheme names:""",
         return []
     
     def classify_query_type(self, query: str, detected_schemes: List[str]) -> Dict[str, any]:
-        """Classify query type for routing decision
-        
-        Returns:
-            {
-                'has_scheme': bool,
-                'schemes': List[str],
-                'retrieval_mode': 'filtered' | 'hybrid',
-                'confidence': float
-            }
-        """
+        """Classify query type for routing decision"""
         has_scheme = len(detected_schemes) > 0
         
         classification = {
             'has_scheme': has_scheme,
             'schemes': detected_schemes,
             'retrieval_mode': 'filtered' if has_scheme else 'hybrid',
-            'confidence': 1.0 if detected_schemes else 0.8  # High confidence with schemes
+            'confidence': 1.0 if detected_schemes else 0.8
         }
         
         logger.info(
@@ -201,19 +301,7 @@ Scheme names:""",
         return classification
     
     def decompose(self, query: str) -> Dict[str, any]:
-        """Complete query decomposition pipeline
-        
-        Args:
-            query: User query
-            
-        Returns:
-            {
-                'original_query': str,
-                'detected_schemes': List[str],
-                'retrieval_mode': 'filtered' | 'hybrid',
-                'filter_params': Dict (Qdrant filter params if filtered mode)
-            }
-        """
+        """Complete query decomposition pipeline"""
         # Extract scheme names
         detected_schemes = self.extract_scheme_names(query)
         
@@ -235,16 +323,8 @@ Scheme names:""",
         return result
     
     def _build_filter_params(self, scheme_names: List[str]) -> Dict:
-        """Build Qdrant filter parameters for scheme names
-        
-        Args:
-            scheme_names: List of canonical scheme names
-            
-        Returns:
-            Qdrant filter dict compatible with qdrant_client.models.Filter
-        """
+        """Build Qdrant filter parameters for scheme names"""
         if len(scheme_names) == 1:
-            # Single scheme - simple match
             return {
                 'must': [
                     {
@@ -254,7 +334,6 @@ Scheme names:""",
                 ]
             }
         else:
-            # Multiple schemes - match any
             return {
                 'must': [
                     {
@@ -268,17 +347,33 @@ Scheme names:""",
 # Global instance for reuse
 _query_decomposer = None
 
-def get_query_decomposer() -> QueryDecomposer:
+def get_query_decomposer(qdrant_client=None, collection_name: str = None) -> QueryDecomposer:
     """Get or create global query decomposer instance"""
     global _query_decomposer
     if _query_decomposer is None:
-        _query_decomposer = QueryDecomposer()
+        _query_decomposer = QueryDecomposer(qdrant_client, collection_name)
     return _query_decomposer
 
 
 if __name__ == "__main__":
     # Test the query decomposer
-    decomposer = QueryDecomposer()
+    from qdrant_client import QdrantClient
+    import config
+    
+    print("\n" + "="*80)
+    print("DYNAMIC QUERY DECOMPOSER TEST")
+    print("="*80 + "\n")
+    
+    # Initialize with Qdrant client
+    client = QdrantClient(
+        url=config.QDRANT_URL,
+        api_key=config.QDRANT_API_KEY
+    )
+    
+    decomposer = QueryDecomposer(client, config.COLLECTION_NAME)
+    
+    print(f"Loaded {len(decomposer.all_schemes)} schemes from Qdrant\n")
+    print(f"Sample schemes: {list(decomposer.all_schemes)[:10]}\n")
     
     test_queries = [
         "Can women entrepreneurs apply for PMEGP?",
@@ -286,18 +381,14 @@ if __name__ == "__main__":
         "Compare PMEGP and Stand Up India schemes",
         "What are the manufacturing subsidy schemes?",  # No specific scheme
         "How to apply for Pradhan Mantri MUDRA Yojana?",
-        "CGTMSE loan guarantee eligibility criteria"
+        "CGTMSE loan guarantee eligibility criteria",
+        "PM employement generation program benefits"  # Typo test
     ]
-    
-    print("\n" + "="*80)
-    print("QUERY DECOMPOSER TEST")
-    print("="*80 + "\n")
     
     for query in test_queries:
         print(f"Query: {query}")
         result = decomposer.decompose(query)
         print(f"  Detected: {result['detected_schemes']}")
         print(f"  Mode: {result['retrieval_mode']}")
-        if result.get('filter_params'):
-            print(f"  Filter: {result['filter_params']}")
+        print(f"  Confidence: {result['confidence']}")
         print()
