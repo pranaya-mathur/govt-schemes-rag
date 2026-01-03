@@ -97,7 +97,8 @@ def judge_relevance(query: str, retrieved_docs: list, reflection_count: int) -> 
         verdict = result.content.strip().upper()
         needs_reflection = verdict == "NO"
         
-        logger.info(f"Relevance judgment: {verdict} → {'NEEDS_REFLECTION' if needs_reflection else 'RELEVANT'}")
+        # Use ASCII arrow for Windows compatibility
+        logger.info(f"Relevance judgment: {verdict} => {'NEEDS_REFLECTION' if needs_reflection else 'RELEVANT'}")
         return needs_reflection
     except Exception as e:
         logger.error(f"Relevance judgment failed: {str(e)}")
@@ -192,7 +193,8 @@ def is_answer_inadequate(query: str, answer: str, correction_count: int) -> bool
         verdict = result.content.strip().upper()
         is_bad = verdict == "YES"
         
-        logger.info(f"Answer quality check: {verdict} → {'INADEQUATE (needs correction)' if is_bad else 'GOOD (accepted)'}")
+        # Use ASCII arrow for Windows compatibility
+        logger.info(f"Answer quality check: {verdict} => {'INADEQUATE (needs correction)' if is_bad else 'GOOD (accepted)'}")
         return is_bad
     except Exception as e:
         logger.error(f"Answer quality check failed: {str(e)}")
