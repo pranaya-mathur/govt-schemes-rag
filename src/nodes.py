@@ -91,6 +91,24 @@ def judge_relevance(query: str, retrieved_docs: list, reflection_count: int) -> 
         logger.warning(f"Max reflection iterations ({MAX_REFLECTION_ITERATIONS}) reached. Proceeding with current docs.")
         return False
     
+    # Score-based auto-approval: Skip judge if scores are clearly good
+    if retrieved_docs:
+        scores = [doc.get('score', 0) for doc in retrieved_docs]
+        avg_score = sum(scores) / len(scores)
+        top_score = max(scores) if scores else 0
+        
+        # Auto-approve if scores are excellent
+        if avg_score >= 0.65:
+            logger.info(f"Auto-approved: avg_score={avg_score:.3f} >= 0.65 (excellent) => RELEVANT")
+            return False
+        
+        # Auto-approve if average is good AND top doc is excellent
+        if avg_score >= 0.55 and top_score >= 0.70:
+            logger.info(f"Auto-approved: avg={avg_score:.3f}, top={top_score:.3f} => RELEVANT")
+            return False
+        
+        logger.debug(f"Calling judge: avg_score={avg_score:.3f}, top_score={top_score:.3f}")
+    
     try:
         schemes_text = retriever.format_for_judge(retrieved_docs)
         
