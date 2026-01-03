@@ -26,7 +26,7 @@ class VectorRetriever:
             raise QdrantConnectionError(f"Could not connect to Qdrant: {str(e)}")
     
     def retrieve(self, query: str, top_k: int = None):
-        """Retrieve top-k documents for query"""
+        """Retrieve top-k documents for query with score filtering"""
         if top_k is None:
             top_k = config.TOP_K
         
@@ -40,16 +40,26 @@ class VectorRetriever:
                 with_payload=True
             )
             
+            # Filter by minimum similarity score threshold
             retrieved_docs = []
-            for point in response.points:
-                retrieved_docs.append({
-                    "id": point.id,
-                    "score": point.score,
-                    "payload": point.payload
-                })
+            filtered_count = 0
             
-            logger.debug(f"Retrieved {len(retrieved_docs)} documents with scores: "
-                        f"{[d['score'] for d in retrieved_docs]}")
+            for point in response.points:
+                if point.score >= config.MIN_SIMILARITY_SCORE:
+                    retrieved_docs.append({
+                        "id": point.id,
+                        "score": point.score,
+                        "payload": point.payload
+                    })
+                else:
+                    filtered_count += 1
+            
+            if filtered_count > 0:
+                logger.info(f"Filtered out {filtered_count} docs below score threshold {config.MIN_SIMILARITY_SCORE}")
+            
+            logger.info(f"Retrieved {len(retrieved_docs)} documents with scores: "
+                       f"{[round(d['score'], 3) for d in retrieved_docs]}")
+            
             return retrieved_docs
         except UnexpectedResponse as e:
             logger.error(f"Qdrant query failed: {str(e)}")
@@ -59,24 +69,49 @@ class VectorRetriever:
             raise RetrievalError(f"Could not retrieve documents: {str(e)}")
     
     def format_for_judge(self, docs: list) -> str:
-        """Format docs for relevance judgment"""
+        """Format docs for relevance judgment - Include content preview for better judgment"""
+        if not docs:
+            return "No documents retrieved."
+        
         lines = []
-        for d in docs:
+        for i, d in enumerate(docs, 1):
             p = d["payload"]
+            # Truncate text to first 300 chars for preview
+            text = p.get('text', '')
+            text_preview = text[:300] + "..." if len(text) > 300 else text
+            
             lines.append(
-                f"- {p.get('scheme_name')} (Theme: {p.get('theme')})"
+                f"{i}. Scheme: {p.get('scheme_name', 'Unknown')}\n"
+                f"   Theme: {p.get('theme', 'Unknown')}\n"
+                f"   Similarity Score: {d.get('score', 0):.3f}\n"
+                f"   Content Preview: {text_preview}"
             )
-        return "\n".join(lines)
+        return "\n\n".join(lines)
     
     def format_for_answer(self, docs: list) -> str:
-        """Format docs for answer generation"""
+        """Format docs for answer generation - Full context with metadata"""
+        if not docs:
+            return "No relevant documents found."
+        
         lines = []
-        for d in docs:
+        for i, d in enumerate(docs, 1):
             p = d["payload"]
-            lines.append(
-                f"Scheme: {p.get('scheme_name')}\n"
-                f"Theme: {p.get('theme')}\n"
-                f"Text: {p.get('text')}\n"
-                f"Official URL: {p.get('official_url')}"
-            )
-        return "\n---\n".join(lines)
+            
+            # Build formatted document
+            doc_text = f"Document {i} (Relevance: {d.get('score', 0):.3f})\n"
+            doc_text += f"Scheme Name: {p.get('scheme_name', 'Unknown')}\n"
+            doc_text += f"Theme: {p.get('theme', 'Unknown')}\n"
+            
+            # Add ministry if available
+            if p.get('ministry'):
+                doc_text += f"Ministry: {p.get('ministry')}\n"
+            
+            doc_text += f"\nContent:\n{p.get('text', 'No content available')}\n"
+            
+            # Add official URL
+            if p.get('official_url'):
+                doc_text += f"\nOfficial URL: {p.get('official_url')}"
+            
+            lines.append(doc_text)
+        
+        return "\n" + "="*80 + "\n".join(["\n" + line for line in lines])
