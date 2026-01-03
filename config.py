@@ -17,6 +17,7 @@ __all__ = [
     'TEMPERATURE',
     'COLLECTION_NAME',
     'TOP_K',
+    'MIN_SIMILARITY_SCORE',
     'INTENT_LABELS',
     'LOG_LEVEL',
     'LOG_FORMAT',
