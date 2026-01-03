@@ -17,6 +17,7 @@ try:
     FUZZY_MATCHING_AVAILABLE = True
 except ImportError:
     FUZZY_MATCHING_AVAILABLE = False
+    logger = setup_logger(__name__)
     logger.warning("rapidfuzz not installed. Fuzzy matching disabled. Install: pip install rapidfuzz")
 
 logger = setup_logger(__name__)
@@ -118,12 +119,13 @@ class QueryDecomposer:
         logger.debug(f"Built {len(self.scheme_variations)} scheme variations")
     
     def _extract_with_exact_match(self, query: str) -> List[str]:
-        """Fast exact matching against scheme names"""
+        """Fast exact matching against scheme names (case-insensitive)"""
         found_schemes = set()
         query_lower = query.lower()
         
         for variant, canonical in self.scheme_variations.items():
             # Use word boundaries to avoid partial matches
+            # Case-insensitive matching
             pattern = r'\b' + re.escape(variant) + r'\b'
             if re.search(pattern, query_lower, re.IGNORECASE):
                 found_schemes.add(canonical)
@@ -131,8 +133,10 @@ class QueryDecomposer:
         
         return list(found_schemes)
     
-    def _extract_with_fuzzy_match(self, query: str, threshold: int = 80) -> List[str]:
+    def _extract_with_fuzzy_match(self, query: str, threshold: int = 75) -> List[str]:
         """Fuzzy matching for handling typos and variations
+        
+        Lowered threshold from 85 to 75 to handle case variations better.
         
         Args:
             query: User query
@@ -145,28 +149,31 @@ class QueryDecomposer:
             return []
         
         try:
-            # Extract potential scheme mentions (capitalized words/phrases)
-            potential_schemes = re.findall(r'\b[A-Z][A-Za-z\s-]+\b', query)
+            # Extract potential scheme mentions (capitalized words/phrases + abbreviations)
+            potential_schemes = re.findall(r'\b[A-Z][A-Za-z\s-]+\b|\b[A-Z]{3,}\b', query)
             
             found_schemes = set()
             
             for potential in potential_schemes:
                 # Skip very short matches
-                if len(potential) < 4:
+                if len(potential) < 3:
                     continue
                 
-                # Fuzzy match against all schemes
+                # Fuzzy match against all schemes (case-insensitive)
                 matches = process.extract(
-                    potential,
-                    self.all_schemes,
+                    potential.lower(),
+                    [s.lower() for s in self.all_schemes],
                     scorer=fuzz.token_sort_ratio,
                     limit=3,
                     score_cutoff=threshold
                 )
                 
-                for match, score, _ in matches:
-                    found_schemes.add(match)
-                    logger.debug(f"Fuzzy match: '{potential}' -> {match} (score: {score})")
+                for match_lower, score, _ in matches:
+                    # Find original scheme name (case-preserved)
+                    canonical = self.scheme_variations.get(match_lower)
+                    if canonical:
+                        found_schemes.add(canonical)
+                        logger.debug(f"Fuzzy match: '{potential}' -> {canonical} (score: {score})")
             
             return list(found_schemes)
             
@@ -220,21 +227,25 @@ Scheme names:""",
             # Validate against known schemes (fuzzy match)
             validated = []
             for scheme in extracted:
-                # Try exact match first
-                if scheme in self.all_schemes:
-                    validated.append(scheme)
-                    logger.debug(f"LLM extraction (exact): {scheme}")
+                # Try exact match first (case-insensitive)
+                canonical = self.scheme_variations.get(scheme.lower())
+                if canonical:
+                    validated.append(canonical)
+                    logger.debug(f"LLM extraction (exact): {scheme} -> {canonical}")
                 # Try fuzzy match
                 elif FUZZY_MATCHING_AVAILABLE and self.all_schemes:
                     matches = process.extractOne(
-                        scheme,
-                        self.all_schemes,
+                        scheme.lower(),
+                        [s.lower() for s in self.all_schemes],
                         scorer=fuzz.ratio,
-                        score_cutoff=85
+                        score_cutoff=75  # Lowered from 85
                     )
                     if matches:
-                        validated.append(matches[0])
-                        logger.debug(f"LLM extraction (fuzzy): '{scheme}' -> {matches[0]}")
+                        match_lower, score, _ = matches
+                        canonical = self.scheme_variations.get(match_lower)
+                        if canonical:
+                            validated.append(canonical)
+                            logger.debug(f"LLM extraction (fuzzy): '{scheme}' -> {canonical} (score: {score})")
             
             return validated
             
@@ -246,8 +257,8 @@ Scheme names:""",
         """Extract scheme names using multi-stage approach
         
         Stages:
-        1. Exact matching (fastest)
-        2. Fuzzy matching (handles variations)
+        1. Exact matching (fastest, case-insensitive)
+        2. Fuzzy matching (handles variations, threshold=75)
         3. LLM extraction (fallback for complex cases)
         
         Args:
@@ -266,7 +277,7 @@ Scheme names:""",
         
         # Stage 2: Try fuzzy matching
         if FUZZY_MATCHING_AVAILABLE:
-            fuzzy_schemes = self._extract_with_fuzzy_match(query, threshold=85)
+            fuzzy_schemes = self._extract_with_fuzzy_match(query, threshold=75)
             if fuzzy_schemes:
                 logger.info(f"Fuzzy match found: {fuzzy_schemes}")
                 return fuzzy_schemes
@@ -361,7 +372,7 @@ if __name__ == "__main__":
     import config
     
     print("\n" + "="*80)
-    print("DYNAMIC QUERY DECOMPOSER TEST")
+    print("DYNAMIC QUERY DECOMPOSER TEST (Case-Insensitive)")
     print("="*80 + "\n")
     
     # Initialize with Qdrant client
@@ -376,9 +387,9 @@ if __name__ == "__main__":
     print(f"Sample schemes: {list(decomposer.all_schemes)[:10]}\n")
     
     test_queries = [
-        "Can women entrepreneurs apply for PMEGP?",
-        "What is the subsidy amount in MUDRA scheme?",
-        "Compare PMEGP and Stand Up India schemes",
+        "Can women entrepreneurs apply for PMEGP?",  # Uppercase
+        "What is the subsidy amount in Pmegp scheme?",  # Mixed case
+        "Compare PMEGP and MUDRA schemes",  # Multiple schemes
         "What are the manufacturing subsidy schemes?",  # No specific scheme
         "How to apply for Pradhan Mantri MUDRA Yojana?",
         "CGTMSE loan guarantee eligibility criteria",
