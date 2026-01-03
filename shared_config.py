@@ -22,7 +22,7 @@ EMBEDDING_DIMENSION = 1024  # BGE-M3 dimension
 # LLM MODELS - Hybrid Approach
 # ============================================
 # Ollama for adaptive/lightweight tasks (local, free)
-OLLAMA_MODEL = "deepseek-r1:8b"  # For intent, reflection, corrective queries
+OLLAMA_MODEL = "phi3.5:3.8b"  # For intent, reflection, corrective queries
 CHUNKING_MODEL = "llama3.1:8b"   # For data pipeline chunking
 
 # Groq for heavy lifting (cloud, fast)
