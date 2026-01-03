@@ -8,9 +8,14 @@ This script creates indexes for:
 Run this once after data indexing to enable metadata filtering.
 """
 import sys
+import os
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from qdrant_client import QdrantClient
 from qdrant_client.models import PayloadSchemaType
-import data_pipeline.config as config
+import config
 
 
 def create_payload_indexes():
