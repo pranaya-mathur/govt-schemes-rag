@@ -25,9 +25,12 @@ class VectorRetriever:
             collections = self.client.get_collections()
             logger.info(f"Connected to Qdrant. Available collections: {len(collections.collections)}")
             
-            # Initialize query decomposer for scheme extraction
-            self.query_decomposer = get_query_decomposer()
-            logger.info("Query decomposer initialized")
+            # Initialize query decomposer with Qdrant client for dynamic scheme loading
+            self.query_decomposer = get_query_decomposer(
+                qdrant_client=self.client,
+                collection_name=self.collection_name
+            )
+            logger.info("Query decomposer initialized with dynamic scheme loading")
             
             # Initialize metadata retriever
             self.metadata_retriever = MetadataRetriever(self.client, self.collection_name)
