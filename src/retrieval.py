@@ -3,6 +3,7 @@ from qdrant_client.http.exceptions import UnexpectedResponse
 from src.embeddings import embedding_model
 from src.exceptions import RetrievalError, QdrantConnectionError
 from src.logger import setup_logger
+from src.adaptive_threshold import adaptive_threshold
 import config
 
 logger = setup_logger(__name__)
@@ -21,15 +22,69 @@ class VectorRetriever:
             # Test connection
             collections = self.client.get_collections()
             logger.info(f"Connected to Qdrant. Available collections: {len(collections.collections)}")
+            
+            # Initialize hybrid retriever if enabled
+            self.hybrid_retriever = None
+            if config.HYBRID_RETRIEVAL_ENABLED:
+                try:
+                    from src.hybrid_retrieval import HybridRetriever
+                    self.hybrid_retriever = HybridRetriever(
+                        semantic_retriever=self,
+                        bm25_weight=config.BM25_WEIGHT,
+                        semantic_weight=config.SEMANTIC_WEIGHT,
+                        rrf_k=config.RRF_K
+                    )
+                    logger.info("Hybrid retrieval enabled with BM25 + Semantic search")
+                except Exception as e:
+                    logger.warning(f"Hybrid retrieval initialization failed: {e}. Falling back to semantic-only.")
+                    self.hybrid_retriever = None
+            
         except Exception as e:
             logger.error(f"Qdrant connection failed: {str(e)}")
             raise QdrantConnectionError(f"Could not connect to Qdrant: {str(e)}")
     
-    def retrieve(self, query: str, top_k: int = None):
-        """Retrieve top-k documents for query with score filtering"""
-        if top_k is None:
-            top_k = config.TOP_K
+    def retrieve(self, query: str, top_k: int = None, intent: str = None):
+        """
+        Retrieve top-k documents for query with adaptive filtering
         
+        Args:
+            query: Search query
+            top_k: Number of documents to retrieve (uses intent-specific if not specified)
+            intent: Query intent for adaptive top_k and threshold
+        
+        Returns:
+            List of retrieved documents with metadata
+        """
+        # Use intent-specific top_k if available
+        if top_k is None:
+            if intent and intent in config.INTENT_TOP_K:
+                top_k = config.INTENT_TOP_K[intent]
+                logger.debug(f"Using intent-specific top_k={top_k} for {intent}")
+            else:
+                top_k = config.TOP_K
+        
+        # Use hybrid retrieval if available, otherwise fall back to semantic
+        if self.hybrid_retriever:
+            docs = self.hybrid_retriever.hybrid_retrieve(query, top_k, intent)
+        else:
+            docs = self._semantic_retrieve(query, top_k)
+        
+        # Apply adaptive threshold filtering
+        filtered_docs, threshold_metadata = adaptive_threshold.filter_documents(
+            docs, intent
+        )
+        
+        # Log threshold decision
+        logger.info(
+            f"Retrieved {len(filtered_docs)}/{len(docs)} documents "
+            f"(threshold={threshold_metadata.get('threshold', 0):.3f}, "
+            f"method={threshold_metadata.get('method', 'unknown')})"
+        )
+        
+        return filtered_docs
+    
+    def _semantic_retrieve(self, query: str, top_k: int):
+        """Internal method for pure semantic retrieval"""
         try:
             query_vector = embedding_model.embed_query(query)
             
@@ -40,27 +95,21 @@ class VectorRetriever:
                 with_payload=True
             )
             
-            # Filter by minimum similarity score threshold
             retrieved_docs = []
-            filtered_count = 0
-            
             for point in response.points:
-                if point.score >= config.MIN_SIMILARITY_SCORE:
-                    retrieved_docs.append({
-                        "id": point.id,
-                        "score": point.score,
-                        "payload": point.payload
-                    })
-                else:
-                    filtered_count += 1
+                retrieved_docs.append({
+                    "id": point.id,
+                    "score": point.score,
+                    "payload": point.payload
+                })
             
-            if filtered_count > 0:
-                logger.info(f"Filtered out {filtered_count} docs below score threshold {config.MIN_SIMILARITY_SCORE}")
-            
-            logger.info(f"Retrieved {len(retrieved_docs)} documents with scores: "
-                       f"{[round(d['score'], 3) for d in retrieved_docs]}")
+            logger.debug(
+                f"Semantic search returned {len(retrieved_docs)} documents with scores: "
+                f"{[round(d['score'], 3) for d in retrieved_docs[:5]]}"
+            )
             
             return retrieved_docs
+            
         except UnexpectedResponse as e:
             logger.error(f"Qdrant query failed: {str(e)}")
             raise RetrievalError(f"Vector search failed: {str(e)}")

@@ -35,8 +35,39 @@ TEMPERATURE = 0.2
 # VECTOR DATABASE
 # ============================================
 COLLECTION_NAME = "myscheme_rag"
+
+# Default top_k
 TOP_K = 5
-MIN_SIMILARITY_SCORE = 0.5  # Filter out docs with similarity score below this threshold
+
+# Intent-specific top_k values (Production-Grade)
+INTENT_TOP_K = {
+    "DISCOVERY": 10,      # Need more schemes for discovery
+    "COMPARISON": 10,     # Need both entities well-represented
+    "ELIGIBILITY": 5,     # Need focused, precise results
+    "BENEFITS": 5,        # Need specific benefit information
+    "PROCEDURE": 5,       # Need clear step-by-step info
+    "GENERAL": 5          # Default moderate retrieval
+}
+
+# Adaptive threshold configuration (replaces static MIN_SIMILARITY_SCORE)
+# See src/adaptive_threshold.py for implementation
+ADAPTIVE_THRESHOLD_CONFIG = {
+    "min_absolute_threshold": 0.3,     # Never go below this
+    "std_dev_multiplier": 0.5,         # Threshold = mean - (std * this)
+    "top_score_ratio": 0.7,            # Minimum ratio of top score
+    "min_docs_required": 1             # Always return at least 1 doc if available
+}
+
+# Legacy static threshold (deprecated, kept for backward compatibility)
+MIN_SIMILARITY_SCORE = 0.5  # Will be replaced by adaptive threshold
+
+# ============================================
+# HYBRID RETRIEVAL CONFIGURATION
+# ============================================
+HYBRID_RETRIEVAL_ENABLED = True
+BM25_WEIGHT = 0.4           # Weight for keyword search
+SEMANTIC_WEIGHT = 0.6       # Weight for semantic search
+RRF_K = 60                  # Reciprocal Rank Fusion parameter
 
 # ============================================
 # INTENT CLASSIFICATION
@@ -72,6 +103,13 @@ MIN_CHUNK_SIZE = 50   # tokens
 # ============================================
 MAX_REFLECTION_ITERATIONS = 2  # Self-RAG query refinement limit
 MAX_CORRECTION_ITERATIONS = 2  # Corrective RAG limit
+
+# ============================================
+# ANSWER GENERATION
+# ============================================
+# Structured output with schema validation
+STRUCTURED_OUTPUT_ENABLED = True
+MAX_ANSWER_RETRY = 2  # Retry generation if schema validation fails
 
 # ============================================
 # LOGGING

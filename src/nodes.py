@@ -66,9 +66,20 @@ def intent_node(state: RAGState):
 
 
 def retrieval_node(state: RAGState):
-    """Document retrieval node"""
-    logger.info(f"Retrieving documents for query: {state['query'][:50]}...")
-    docs = retriever.retrieve(state["query"])
+    """
+    Document retrieval node with intent-specific parameters
+    
+    Now uses:
+    - Intent-specific top_k values
+    - Adaptive threshold filtering
+    - Hybrid retrieval (BM25 + semantic)
+    """
+    intent = state.get("intent", "GENERAL")
+    logger.info(f"Retrieving documents for query: {state['query'][:50]}... (intent={intent})")
+    
+    # Pass intent to retriever for adaptive behavior
+    docs = retriever.retrieve(state["query"], intent=intent)
+    
     logger.info(f"Retrieved {len(docs)} documents")
     return {"retrieved_docs": docs}
 
@@ -133,12 +144,21 @@ def refine_query(query: str) -> str:
 
 
 def reflection_node(state: RAGState):
-    """Query refinement and re-retrieval node - Uses Ollama"""
+    """
+    Query refinement and re-retrieval node - Uses Ollama
+    
+    Now maintains intent context for consistent retrieval behavior
+    """
     reflection_count = state.get("reflection_count", 0) + 1
+    intent = state.get("intent", "GENERAL")
+    
     logger.info(f"Reflection iteration {reflection_count}/{MAX_REFLECTION_ITERATIONS}")
     
     refined_query = refine_query(state["query"])
-    refined_docs = retriever.retrieve(refined_query)
+    
+    # Re-retrieve with same intent context
+    refined_docs = retriever.retrieve(refined_query, intent=intent)
+    
     logger.info(f"Re-retrieved {len(refined_docs)} documents after refinement")
     
     return {
@@ -217,8 +237,13 @@ def corrective_query(query: str) -> str:
 
 
 def corrective_rag_node(state: RAGState):
-    """Corrective RAG node for answer improvement - Uses Ollama"""
+    """
+    Corrective RAG node for answer improvement - Uses Ollama
+    
+    Now maintains intent context for consistent retrieval
+    """
     correction_count = state.get("correction_count", 0)
+    intent = state.get("intent", "GENERAL")
     
     needs_correction = is_answer_inadequate(
         state["query"], 
@@ -233,7 +258,10 @@ def corrective_rag_node(state: RAGState):
     logger.info(f"Correction iteration {correction_count}/{MAX_CORRECTION_ITERATIONS}")
     
     new_query = corrective_query(state["query"])
-    new_docs = retriever.retrieve(new_query)
+    
+    # Corrective retrieval with same intent
+    new_docs = retriever.retrieve(new_query, intent=intent)
+    
     logger.info(f"Corrective retrieval returned {len(new_docs)} documents")
     
     return {
