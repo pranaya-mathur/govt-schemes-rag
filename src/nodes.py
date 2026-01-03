@@ -82,12 +82,22 @@ def judge_relevance(query: str, retrieved_docs: list, reflection_count: int) -> 
     
     try:
         schemes_text = retriever.format_for_judge(retrieved_docs)
+        
+        # DEBUG: Log what judge sees
+        logger.debug(f"\n{'='*80}\nRELEVANCE JUDGE INPUT:\n{'='*80}\n"
+                    f"Query: {query}\n\n"
+                    f"Schemes Preview:\n{schemes_text[:1000]}...\n{'='*80}")
+        
         chain = relevance_prompt | groq_llm  # Using Groq
         result = chain.invoke({"query": query, "schemes": schemes_text})
-        verdict = result.content.strip().upper()
         
+        # DEBUG: Log raw LLM response
+        logger.debug(f"Relevance judge raw response: '{result.content}'")
+        
+        verdict = result.content.strip().upper()
         needs_reflection = verdict == "NO"
-        logger.info(f"Relevance judgment: {'NEEDS_REFLECTION' if needs_reflection else 'RELEVANT'}")
+        
+        logger.info(f"Relevance judgment: {verdict} → {'NEEDS_REFLECTION' if needs_reflection else 'RELEVANT'}")
         return needs_reflection
     except Exception as e:
         logger.error(f"Relevance judgment failed: {str(e)}")
@@ -113,7 +123,7 @@ def refine_query(query: str) -> str:
         chain = reflection_prompt | ollama_llm  # Using Ollama
         result = chain.invoke({"query": query})
         refined = result.content.strip()
-        logger.info(f"Refined query: {refined[:50]}...")
+        logger.info(f"Refined query: {refined[:100]}...")
         return refined
     except Exception as e:
         logger.error(f"Query refinement failed: {str(e)}")
@@ -144,6 +154,10 @@ def answer_node(state: RAGState):
     try:
         logger.info("Generating answer...")
         schemes_text = retriever.format_for_answer(state["retrieved_docs"])
+        
+        # DEBUG: Log input to answer generation
+        logger.debug(f"Answer generation using {len(state['retrieved_docs'])} documents")
+        
         chain = answer_prompt | groq_llm  # Using Groq
         result = chain.invoke({
             "query": state["query"],
@@ -164,12 +178,21 @@ def is_answer_inadequate(query: str, answer: str, correction_count: int) -> bool
         return False
     
     try:
+        # DEBUG: Log what quality judge sees
+        logger.debug(f"\n{'='*80}\nQUALITY JUDGE INPUT:\n{'='*80}\n"
+                    f"Query: {query}\n\n"
+                    f"Answer:\n{answer[:500]}...\n{'='*80}")
+        
         chain = answer_quality_prompt | groq_llm  # Using Groq
         result = chain.invoke({"query": query, "answer": answer})
-        verdict = result.content.strip().upper()
         
+        # DEBUG: Log raw LLM response
+        logger.debug(f"Quality judge raw response: '{result.content}'")
+        
+        verdict = result.content.strip().upper()
         is_bad = verdict == "YES"
-        logger.info(f"Answer quality check: {'INADEQUATE' if is_bad else 'GOOD'}")
+        
+        logger.info(f"Answer quality check: {verdict} → {'INADEQUATE (needs correction)' if is_bad else 'GOOD (accepted)'}")
         return is_bad
     except Exception as e:
         logger.error(f"Answer quality check failed: {str(e)}")
@@ -184,7 +207,7 @@ def corrective_query(query: str) -> str:
         chain = corrective_prompt | ollama_llm  # Using Ollama
         result = chain.invoke({"query": query})
         corrected = result.content.strip()
-        logger.info(f"Corrective query: {corrected[:50]}...")
+        logger.info(f"Corrective query: {corrected[:100]}...")
         return corrected
     except Exception as e:
         logger.error(f"Corrective query generation failed: {str(e)}")
