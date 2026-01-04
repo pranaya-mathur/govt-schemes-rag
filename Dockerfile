@@ -11,11 +11,19 @@ RUN apt-get update && apt-get install -y \
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies
+# CRITICAL FIX: Install CPU-only PyTorch FIRST (before sentence-transformers)
+# This saves 3-4GB by excluding CUDA/GPU libraries
+RUN pip install --no-cache-dir \
+    torch==2.1.0+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# Install other Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download embedding model during build
-RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('BAAI/bge-m3')"
+# CRITICAL FIX: DO NOT download model in image
+# Model will be cached in Docker volume at runtime
+# This saves 1.06GB and allows model reuse across deployments
+# Warmup script will handle first-time download
 
 # Copy application code
 COPY . .
