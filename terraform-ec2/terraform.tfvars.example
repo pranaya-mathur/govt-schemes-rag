@@ -1,0 +1,74 @@
+# Yojana-AI Terraform Variables Example
+# Copy this file to terraform.tfvars and update with your values
+# NEVER commit terraform.tfvars to Git!
+
+# ============================================
+# REQUIRED VARIABLES
+# ============================================
+
+# Your EC2 key pair name (must be created first)
+key_name = "yojana-ai-key"
+
+# Your public IP address for SSH/Jenkins access
+# Get your IP: curl ifconfig.me
+allowed_ips = ["203.0.113.0/32"]  # Replace with YOUR_IP/32
+
+# ============================================
+# OPTIONAL VARIABLES (with defaults)
+# ============================================
+
+# AWS region
+aws_region = "us-east-1"
+
+# Project name (used for resource naming)
+project_name = "yojana-ai"
+
+# Environment
+environment = "production"
+
+# Jenkins instance type (t2.micro is sufficient)
+jenkins_instance_type = "t2.micro"
+
+# App instance type (must be at least t2.small for 2GB RAM)
+app_instance_type = "t2.small"
+
+# App server EBS size in GB (minimum 40GB)
+app_ebs_size = 42
+
+# Enable detailed monitoring (costs extra)
+enable_detailed_monitoring = false
+
+# Allocate Elastic IPs (static IPs, free when attached)
+enable_elastic_ips = false
+
+# Additional tags
+tags = {
+  Owner      = "DevOps"
+  CostCenter = "Portfolio"
+  Terraform  = "true"
+  Project    = "Yojana-AI"
+}
+
+# ============================================
+# SECURITY NOTES
+# ============================================
+
+# 1. RESTRICT allowed_ips to YOUR IP only!
+#    Never use 0.0.0.0/0 in production
+#
+# 2. Keep key_name private and secure
+#
+# 3. Add terraform.tfvars to .gitignore:
+#    echo "terraform.tfvars" >> .gitignore
+#
+# 4. Use different values for dev/staging/prod
+
+# ============================================
+# COST OPTIMIZATION TIPS
+# ============================================
+
+# - Keep enable_detailed_monitoring = false (saves $2-3/month)
+# - Use t2.small only for app server (not t2.medium)
+# - Set app_ebs_size to 42GB (not more unless needed)
+# - Use on-demand instances (stop when not in use)
+# - enable_elastic_ips = false unless you need static IPs
