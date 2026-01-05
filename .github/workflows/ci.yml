@@ -1,0 +1,278 @@
+name: CI Pipeline - Build, Test & Push
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: yojana-ai
+  
+jobs:
+  # ============================================
+  # Job 1: Code Quality & Testing
+  # ============================================
+  test:
+    name: Run Tests & Code Quality Checks
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # Install CPU-only PyTorch first (lighter for CI)
+          pip install torch==2.1.0+cpu --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+          # Install testing dependencies
+          pip install pytest pytest-asyncio pytest-cov httpx
+      
+      - name: Lint with ruff (optional but recommended)
+        continue-on-error: true
+        run: |
+          pip install ruff
+          ruff check . --output-format=github || true
+      
+      - name: Run unit tests
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          QDRANT_URL: ${{ secrets.QDRANT_URL }}
+          QDRANT_API_KEY: ${{ secrets.QDRANT_API_KEY }}
+          OLLAMA_BASE_URL: http://localhost:11434
+        run: |
+          # Run tests if they exist
+          if [ -d "tests" ]; then
+            pytest tests/ -v --cov=src --cov=api --cov-report=term-missing
+          else
+            echo "⚠️ No tests directory found - skipping tests"
+            echo "TODO: Add pytest tests for production readiness"
+          fi
+      
+      - name: Validate configuration files
+        run: |
+          echo "✓ Checking Python syntax..."
+          python -m py_compile shared_config.py
+          python -m py_compile config.py
+          python -m py_compile api/app.py
+          echo "✓ All configuration files valid"
+
+  # ============================================
+  # Job 2: Build & Push Docker Image to ECR
+  # ============================================
+  build-and-push:
+    name: Build Docker Image & Push to ECR
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    
+    outputs:
+      image-tag: ${{ steps.meta.outputs.tags }}
+      commit-sha: ${{ github.sha }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Extract metadata for Docker
+        id: meta
+        run: |
+          COMMIT_SHA_SHORT=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_TAG="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${COMMIT_SHA_SHORT}"
+          LATEST_TAG="${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest"
+          
+          echo "image-tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+          echo "latest-tag=${LATEST_TAG}" >> $GITHUB_OUTPUT
+          echo "commit-sha-short=${COMMIT_SHA_SHORT}" >> $GITHUB_OUTPUT
+          
+          echo "🏷️ Image will be tagged as:"
+          echo "   - ${IMAGE_TAG}"
+          echo "   - ${LATEST_TAG}"
+      
+      - name: Build Docker image
+        run: |
+          echo "🐳 Building Docker image..."
+          docker build \
+            --build-arg BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \
+            --build-arg VCS_REF=${{ github.sha }} \
+            --tag ${{ steps.meta.outputs.image-tag }} \
+            --tag ${{ steps.meta.outputs.latest-tag }} \
+            .
+          
+          echo "✓ Docker image built successfully"
+          docker images | grep yojana-ai
+      
+      - name: Test Docker image health
+        run: |
+          echo "🔍 Running container health check..."
+          
+          # Start container in detached mode
+          docker run -d \
+            --name yojana-ai-test \
+            -p 8000:8000 \
+            -e GROQ_API_KEY=${{ secrets.GROQ_API_KEY }} \
+            -e QDRANT_URL=${{ secrets.QDRANT_URL }} \
+            -e QDRANT_API_KEY=${{ secrets.QDRANT_API_KEY }} \
+            ${{ steps.meta.outputs.image-tag }}
+          
+          # Wait for container to be ready (max 60 seconds)
+          echo "Waiting for container to start..."
+          for i in {1..60}; do
+            if docker exec yojana-ai-test curl -f http://localhost:8000/health > /dev/null 2>&1; then
+              echo "✓ Container is healthy!"
+              break
+            fi
+            if [ $i -eq 60 ]; then
+              echo "❌ Container failed to become healthy"
+              docker logs yojana-ai-test
+              exit 1
+            fi
+            sleep 1
+          done
+          
+          # Cleanup
+          docker stop yojana-ai-test
+          docker rm yojana-ai-test
+      
+      - name: Push image to Amazon ECR
+        run: |
+          echo "📤 Pushing Docker image to ECR..."
+          docker push ${{ steps.meta.outputs.image-tag }}
+          docker push ${{ steps.meta.outputs.latest-tag }}
+          echo "✓ Image pushed successfully to ECR"
+      
+      - name: Generate deployment artifact
+        run: |
+          cat > deployment-info.json <<EOF
+          {
+            "commit_sha": "${{ github.sha }}",
+            "commit_sha_short": "${{ steps.meta.outputs.commit-sha-short }}",
+            "image_tag": "${{ steps.meta.outputs.image-tag }}",
+            "latest_tag": "${{ steps.meta.outputs.latest-tag }}",
+            "build_time": "$(date -u +'%Y-%m-%dT%H:%M:%SZ')",
+            "branch": "${{ github.ref_name }}",
+            "actor": "${{ github.actor }}"
+          }
+          EOF
+          cat deployment-info.json
+      
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-info
+          path: deployment-info.json
+          retention-days: 30
+
+  # ============================================
+  # Job 3: Trigger Jenkins Deployment
+  # ============================================
+  trigger-jenkins:
+    name: Trigger Jenkins CD Pipeline
+    runs-on: ubuntu-latest
+    needs: build-and-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Download deployment artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-info
+      
+      - name: Trigger Jenkins deployment job
+        run: |
+          echo "🚀 Triggering Jenkins deployment pipeline..."
+          
+          # Extract deployment info
+          IMAGE_TAG=$(cat deployment-info.json | grep -o '"image_tag": "[^"]*' | cut -d'"' -f4)
+          COMMIT_SHA=$(cat deployment-info.json | grep -o '"commit_sha": "[^"]*' | cut -d'"' -f4)
+          
+          # Trigger Jenkins job via webhook
+          RESPONSE=$(curl -X POST \
+            --user "${{ secrets.JENKINS_USER }}:${{ secrets.JENKINS_TOKEN }}" \
+            --data-urlencode "IMAGE_TAG=${IMAGE_TAG}" \
+            --data-urlencode "COMMIT_SHA=${COMMIT_SHA}" \
+            --write-out "%{http_code}" \
+            --silent \
+            --output /dev/null \
+            "${{ secrets.JENKINS_URL }}/job/yojana-ai-deploy/buildWithParameters")
+          
+          if [ "$RESPONSE" -eq 201 ] || [ "$RESPONSE" -eq 200 ]; then
+            echo "✓ Jenkins deployment triggered successfully (HTTP ${RESPONSE})"
+            echo "📊 Monitor deployment at: ${{ secrets.JENKINS_URL }}/job/yojana-ai-deploy/"
+          else
+            echo "❌ Failed to trigger Jenkins deployment (HTTP ${RESPONSE})"
+            exit 1
+          fi
+      
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ CI Pipeline completed successfully"
+            echo "🔄 Jenkins CD pipeline triggered for deployment"
+          else
+            echo "❌ CI Pipeline failed"
+          fi
+
+  # ============================================
+  # Job 4: Notification (Optional)
+  # ============================================
+  notify:
+    name: Send Notifications
+    runs-on: ubuntu-latest
+    needs: [test, build-and-push, trigger-jenkins]
+    if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Prepare notification message
+        id: message
+        run: |
+          if [ "${{ needs.trigger-jenkins.result }}" == "success" ]; then
+            MESSAGE="✅ Yojana-AI CI/CD Pipeline Success\n\nCommit: ${{ github.sha }}\nBranch: ${{ github.ref_name }}\nAuthor: ${{ github.actor }}\n\nJenkins deployment triggered successfully."
+          else
+            MESSAGE="❌ Yojana-AI CI/CD Pipeline Failed\n\nCommit: ${{ github.sha }}\nBranch: ${{ github.ref_name }}\nAuthor: ${{ github.actor }}\n\nCheck GitHub Actions for details."
+          fi
+          echo "message=${MESSAGE}" >> $GITHUB_OUTPUT
+      
+      - name: Send Slack notification (if configured)
+        if: env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST "${{ secrets.SLACK_WEBHOOK_URL }}" \
+            -H 'Content-Type: application/json' \
+            -d '{"text":"${{ steps.message.outputs.message }}"}'
+        continue-on-error: true
+      
+      - name: Summary
+        run: |
+          echo "### 🚀 CI Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Test Status:** ${{ needs.test.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Status:** ${{ needs.build-and-push.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Jenkins Trigger:** ${{ needs.trigger-jenkins.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Author:** ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
